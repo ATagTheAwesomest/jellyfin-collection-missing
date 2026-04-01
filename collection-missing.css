@@ -3,8 +3,8 @@
 /* Expanded card — wider to fit missing titles list */
 /* Responsive expanded card — flexible width for different screens */
 .je-coll-expanded {
-    width: clamp(220px, 40vw, 420px) !important;
-    min-width: 220px !important;
+    width: clamp(140px, 35vw, 300px) !important;
+    min-width: 140px !important;
     max-width: 100vw !important;
     flex: 1 1 auto !important;
 }
