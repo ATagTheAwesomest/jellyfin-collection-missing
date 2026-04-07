@@ -1,6 +1,6 @@
 # Jellyfin Collection Missing Titles
 
-A pair of inject files (`collection-missing.js` + `collection-missing.css`) that add a **toggle button** to any Jellyfin collection grid page. When active, each collection card widens to show which movies from that TMDB collection are missing from your library — and clicking a title opens the Jellyfin Enhanced "More Info" / Jellyseerr request overlay directly.
+A pair of inject files (`collection-missing.js` + `collection-missing.css`) that add a **toggle button** to any Jellyfin collection grid page. When active, each collection card expands to show which movies from that TMDB collection are missing from your library — clicking a title opens the Jellyfin Enhanced "More Info" / Jellyseerr request overlay directly.
 
 ---
 
@@ -22,7 +22,7 @@ A pair of inject files (`collection-missing.js` + `collection-missing.css`) that
 |---|---|
 | [Jellyfin Enhanced](https://github.com/InfinityPracticeMirror/Jellyfin-Enhanced) plugin | Must be installed and active |
 | Jellyseerr configured in Jellyfin Enhanced | The plugin proxies collection data from Jellyseerr |
-| A CSS/JS injector | e.g. the JS Injector feature built into Jellyfin Enhanced |
+| A CSS/JS injector | e.g. the JS Injector feature built into Jellyfin Enhanced (you can use the Branding tab in yout jellyfin dashboard to load the CSS) |
 
 ---
 
@@ -62,7 +62,7 @@ Card width (default `320px`) and all other visual styles are in `collection-miss
 
 ---
 
-## How It Works
+## How it works
 
 1. A polling loop watches for hash-based SPA navigation changes.
 2. When a collection grid page is detected, the toggle button is injected into the toolbar.
@@ -71,3 +71,9 @@ Card width (default `320px`) and all other visual styles are in `collection-miss
 5. Parts are filtered: movies with no release date or a future release date are excluded; fully available movies (Jellyseerr status `5`) are excluded.
 6. The remaining missing titles are rendered as clickable items that call `window.JellyfinEnhanced.jellyseerrMoreInfo.open(tmdbId, 'movie')`.
 7. A `MutationObserver` handles any cards added by infinite scroll while the toggle is active.
+
+---
+
+## Console logging
+
+The script logs to the browser console with a `[CollectionMissing]` prefix. Open **F12 → Console** to observe it.
