@@ -104,6 +104,13 @@
         return window.ApiClient || null;
     }
 
+    function authHeaders(api) {
+        return {
+            'X-Emby-Token':       api.accessToken(),
+            'X-Jellyfin-User-Id': api.getCurrentUserId()
+        };
+    }
+
     /**
      * Calls the Jellyfin Enhanced boxset endpoint to get the TMDB collection ID
      * for a given Jellyfin BoxSet item ID.
@@ -170,6 +177,66 @@
         }
     }
 
+    /**
+     * AutoCollections fallback: when Seerr is unavailable, exports the
+     * AutoCollections plugin config to find the TitleMatch rule for this
+     * collection, then returns library movies that match the rule but are
+     * not yet in the BoxSet.
+     * @param {string} jellyfinId
+     * @returns {Promise<Array|null>}  null = AC not configured / collection not found
+     */
+    async function fetchMissingFromAutoCollections(jellyfinId) {
+        const api = getApiClient();
+        if (!api) return null;
+        const hdrs = authHeaders(api);
+
+        try {
+            // 1. Resolve collection name
+            const itemResp = await fetch(api.getUrl(`/Items/${jellyfinId}`), { headers: hdrs });
+            if (!itemResp.ok) return null;
+            const { Name: collectionName } = await itemResp.json();
+            if (!collectionName) return null;
+
+            // 2. Fetch AutoCollections configuration
+            const cfgResp = await fetch(api.getUrl('/AutoCollections/ExportConfiguration'), { headers: hdrs });
+            if (!cfgResp.ok) return null;
+            const config = await cfgResp.json();
+
+            const rule = config.TitleMatchPairs?.find(
+                p => p.CollectionName?.toLowerCase() === collectionName.toLowerCase()
+            );
+            if (!rule) return null; // not a TitleMatch collection
+
+            // 3. Items already in the BoxSet
+            const inResp = await fetch(
+                api.getUrl('/Items', { ParentId: jellyfinId, IncludeItemTypes: 'Movie', Recursive: true, Limit: 500 }),
+                { headers: hdrs }
+            );
+            const inData = inResp.ok ? await inResp.json() : { Items: [] };
+            const inSet  = new Set((inData.Items || []).map(m => m.Id));
+
+            // 4. Library movies matching the title rule
+            const srchResp = await fetch(
+                api.getUrl('/Items', { searchTerm: rule.TitleMatch, IncludeItemTypes: 'Movie', Recursive: true, Limit: 200 }),
+                { headers: hdrs }
+            );
+            if (!srchResp.ok) return null;
+            const { Items: found = [] } = await srchResp.json();
+
+            return found
+                .filter(m => !inSet.has(m.Id))
+                .map(m => ({
+                    id:          m.Id,
+                    title:       m.Name,
+                    releaseDate: m.PremiereDate || (m.ProductionYear ? `${m.ProductionYear}-01-01` : null),
+                    _isLocal:    true
+                }));
+        } catch (e) {
+            logWarn('fetchMissingFromAutoCollections failed', e);
+            return null;
+        }
+    }
+
     // ─── Card expansion / collapse ───────────────────────────────────────────
     /**
      * Strips all expansion state from a card element.
@@ -182,6 +249,56 @@
         if (box) {
             box.querySelector('.je-missing-list')?.remove();
         }
+    }
+
+    /** Renders a single clickable missing-movie item into listEl. */
+    function renderMovieItem(listEl, movie) {
+        const { id, title, releaseDate, _isLocal } = movie;
+        const displayTitle = title || movie.name || 'Unknown';
+        const year = releaseDate ? new Date(releaseDate).getFullYear() : '';
+
+        const item = document.createElement('span');
+        item.className   = 'je-missing-item';
+        item.textContent = year ? `${displayTitle} (${year})` : displayTitle;
+        item.setAttribute('tabindex', '0');
+        item.setAttribute('role',      'button');
+        item.setAttribute('aria-label', `Show info for ${displayTitle}`);
+
+        const openOverlay = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (_isLocal) {
+                window.location.hash = `#/details?id=${id}`;
+                return;
+            }
+            const JE = window.JellyfinEnhanced;
+            if (JE?.jellyseerrMoreInfo?.open) {
+                JE.jellyseerrMoreInfo.open(id, 'movie');
+            } else {
+                logWarn('JellyfinEnhanced.jellyseerrMoreInfo.open not available');
+            }
+        };
+        item.addEventListener('click', openOverlay);
+        item.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') openOverlay(e); });
+        listEl.appendChild(item);
+    }
+
+    /** Renders the full missing-items list (or a ✓ Complete badge) into listEl. */
+    function renderMissingItems(listEl, items, indicator) {
+        if (items.length === 0) {
+            const ok = document.createElement('span');
+            ok.className   = 'je-missing-complete';
+            ok.textContent = '\u2713 Complete';
+            listEl.appendChild(ok);
+            indicator?.classList.add('je-complete-indicator');
+            return;
+        }
+        indicator?.classList.remove('je-complete-indicator');
+        const header = document.createElement('span');
+        header.className   = 'je-missing-header';
+        header.textContent = `Missing (${items.length})`;
+        listEl.appendChild(header);
+        items.forEach(movie => renderMovieItem(listEl, movie));
     }
 
     /**
@@ -212,9 +329,8 @@
         cardBox.appendChild(listEl);
 
         try {
-            // Step 1: resolve TMDB collection ID from the Jellyfin BoxSet ID
+            // Step 1: resolve TMDB collection ID
             const tmdbCollectionId = await fetchTmdbCollectionId(jellyfinId);
-
             if (!isExpanded) { collapseCard(card); return; }
 
             if (!tmdbCollectionId) {
@@ -223,66 +339,23 @@
                 return;
             }
 
-            // Step 2: get the missing parts from Seerr
-            const missing = await fetchMissingMovies(tmdbCollectionId);
-
+            // Step 2: try Seerr; fall back to AutoCollections if unavailable
+            let missing = await fetchMissingMovies(tmdbCollectionId);
             if (!isExpanded) { collapseCard(card); return; }
 
-            listEl.innerHTML = '';
+            if (missing === null) {
+                log('Seerr unavailable — trying AutoCollections fallback');
+                missing = await fetchMissingFromAutoCollections(jellyfinId);
+                if (!isExpanded) { collapseCard(card); return; }
+            }
 
+            listEl.innerHTML = '';
             const indicator = card.querySelector('.countIndicator');
 
             if (missing === null) {
-                // Seerr not configured or not reachable
                 listEl.innerHTML = '<span class="je-missing-note">Seerr unavailable</span>';
-
-            } else if (missing.length === 0) {
-                const ok = document.createElement('span');
-                ok.className   = 'je-missing-complete';
-                ok.textContent = '\u2713 Complete';
-                listEl.appendChild(ok);
-                indicator?.classList.add('je-complete-indicator');
-
             } else {
-                indicator?.classList.remove('je-complete-indicator');
-
-                const header = document.createElement('span');
-                header.className   = 'je-missing-header';
-                header.textContent = `Missing (${missing.length})`;
-                listEl.appendChild(header);
-
-                missing.forEach(movie => {
-                    const tmdbId = movie.id;
-                    const title  = movie.title || movie.name || 'Unknown';
-                    const year   = movie.releaseDate
-                        ? new Date(movie.releaseDate).getFullYear()
-                        : '';
-
-                    const item = document.createElement('span');
-                    item.className   = 'je-missing-item';
-                    item.textContent = year ? `${title} (${year})` : title;
-                    item.setAttribute('tabindex', '0');
-                    item.setAttribute('role',      'button');
-                    item.setAttribute('aria-label', `Show info for ${title}`);
-
-                    const openOverlay = (e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        const JE = window.JellyfinEnhanced;
-                        if (JE && JE.jellyseerrMoreInfo && typeof JE.jellyseerrMoreInfo.open === 'function') {
-                            JE.jellyseerrMoreInfo.open(tmdbId, 'movie');
-                        } else {
-                            logWarn('JellyfinEnhanced.jellyseerrMoreInfo.open not available');
-                        }
-                    };
-
-                    item.addEventListener('click', openOverlay);
-                    item.addEventListener('keydown', (e) => {
-                        if (e.key === 'Enter' || e.key === ' ') openOverlay(e);
-                    });
-
-                    listEl.appendChild(item);
-                });
+                renderMissingItems(listEl, missing, indicator);
             }
 
             card.dataset.jeMissing = 'done';
