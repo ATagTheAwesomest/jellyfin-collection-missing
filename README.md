@@ -1,10 +1,10 @@
 # Jellyfin Collection Missing Titles
 
 > [!WARNING]
-> This standalone repo is deprecated and now archived. Active organisation and future discovery live in the `jellyfin-web-injected-enhancements` super-repo in this workspace.
+> This standalone repo is deprecated and now archived. Active organisation and future discovery live in the `jellyfin-wipe` super-repo in this workspace.
 
 > [!IMPORTANT]
-> For new installs, use the consolidated script list and docs in `jellyfin-web-injected-enhancements` instead of treating this standalone repo as the primary source.
+> For new installs, use the consolidated script list and docs in `jellyfin-wipe` instead of treating this standalone repo as the primary source.
 
 A pair of inject files (`collection-missing.js` + `collection-missing.css`) that add a **toggle button** to any Jellyfin collection grid page. When active, each collection card expands to show which movies from that TMDB collection are missing from your library — clicking a title opens the Jellyfin Enhanced "More Info" / Jellyseerr request overlay directly.
 
